@@ -57,7 +57,7 @@ xattr -dr com.apple.quarantine "/Applications/OSW Cloud.app"
 
 The tracked source rebuilds both the app and the DMG. Verified by cloning the repo to a clean directory and running the pipeline: all patches applied and the app built.
 
-Clone this fork with `git clone --recurse-submodules https://github.com/Albatross679/OpenSuperWhisper.git`, then check out the published OSW Cloud branch. The upstream default `develop` branch remains separate during migration. Run `python3 scripts/patch_osw.py`, `npm test`, `scripts/test_shortcuts.sh` and `scripts/build_app.sh`. The candidate is `build/Build/Products/Release/OpenSuperWhisper.app`. These commands do not install or launch it.
+Clone this fork with `git clone --recurse-submodules https://github.com/Albatross679/OpenSuperWhisper.git`. Its default branch `osw-cloud-baseline` contains the published OSW Cloud project. Upstream `develop` remains a separate preserved branch. Run `python3 scripts/patch_osw.py`, `npm test`, `scripts/test_shortcuts.sh` and `scripts/build_app.sh`. The candidate is `build/Build/Products/Release/OpenSuperWhisper.app`. These commands do not install or launch it.
 
 App source is tracked at `OpenSuperWhisper/` in the repository root, not in a nested clone. `build/`, `SourcePackages/`, submodule build products and `runs/` are local outputs. Upstream baseline `bef6bc0421d0c010e8f2fb4288c0d74978c8b964` is preserved in git history and recorded in `scripts/patch_osw.py`. Updating to newer upstream behavior is separate work. Do not run the old external manager's destructive `--sync` against this fork.
 
