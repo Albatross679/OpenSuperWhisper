@@ -4,9 +4,9 @@ OSW Cloud now has a genuine GitHub fork at https://github.com/Albatross679/OpenS
 
 ## Branches and baseline
 
-The fork's default `develop` retains the complete upstream history, including c8e6fe7 and the later recording, queue, engine and cancellation refactor. No default-branch change, overwrite or force push is part of migration.
+The fork's default branch is `osw-cloud-baseline`, containing the merged OSW Cloud migration. The separately preserved `develop` branch retains the complete upstream history, including c8e6fe7 and the later recording, queue, engine and cancellation refactor. The default was changed with explicit user approval after migration publication, without overwriting or force-pushing either branch.
 
-The migration PR uses `codex/osw-cloud-migration`, based on upstream `bef6bc0421d0c010e8f2fb4288c0d74978c8b964`, with a separate `osw-cloud-baseline` PR base at that same pinned commit. This avoids a PR that silently reverts newer develop behavior. The pinned baseline is the currently installed and verified OSW Cloud app's actual upstream source, not a claim that latest upstream is integrated. Later upstream changes remain available on develop and must be integrated in separate reviewed work. During migration, cloning the default branch does not select OSW Cloud; explicitly select its reviewed publication branch.
+The migration PR uses `codex/osw-cloud-migration`, based on upstream `bef6bc0421d0c010e8f2fb4288c0d74978c8b964`, with a separate `osw-cloud-baseline` PR base at that same pinned commit. This avoids a PR that silently reverts newer develop behavior. The pinned baseline is the currently installed and verified OSW Cloud app's actual upstream source, not a claim that latest upstream is integrated. Later upstream changes remain available on develop and must be integrated in separate reviewed work. After publication and the approved default-branch change, a normal clone or public repository visit selects OSW Cloud on `osw-cloud-baseline`.
 
 ## Whole-project scope
 
