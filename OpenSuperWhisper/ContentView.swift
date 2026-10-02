@@ -186,10 +186,11 @@ class ContentViewModel: ObservableObject {
             guard let self = self else { return }
             
             if let tempURL = await self.recorder.stopRecording() {
+                let metricID = UUID()
                 do {
                     print("start decoding...")
                     let duration = await AudioUtil.audioDuration(url: tempURL)
-                    let text = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    let text = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings(), metricID: metricID)
 
                     if text.isEmpty {
                         try? FileManager.default.removeItem(at: tempURL)
@@ -197,7 +198,7 @@ class ContentViewModel: ObservableObject {
                     } else {
                         let timestamp = Date()
                         let fileName = "\(Int(timestamp.timeIntervalSince1970)).wav"
-                        let recordingId = UUID()
+                        let recordingId = metricID
                         let newRecording = Recording(
                             id: recordingId,
                             timestamp: timestamp,
@@ -224,8 +225,7 @@ class ContentViewModel: ObservableObject {
                         print("Transcription result: \(text)")
                     }
                 } catch {
-                    print("Error transcribing audio: \(error)")
-                    try? FileManager.default.removeItem(at: tempURL)
+                    await DictationFailure.record(audioAt: tempURL, error: error, recordingID: metricID)
                 }
 
                 await MainActor.run {
@@ -534,6 +534,16 @@ struct ContentView: View {
                                         .foregroundColor(.secondary)
                                 }
                                 .padding(.leading, 4)
+
+                                // Neurons are a Cloudflare billing unit, so the
+                                // readout is hidden rather than shown empty on
+                                // a provider that has none.
+                                UsageDashboardButton()
+                                if AppPreferences.shared.selectedEngine == "cloudflare",
+                                   CloudProviderSelection.current == .cloudflare,
+                                   AppPreferences.shared.cloudflareConnectionMode != "direct" {
+                                    CloudflareUsageView(refreshToken: viewModel.recordings.count)
+                                }
                             }
 
                             Spacer()

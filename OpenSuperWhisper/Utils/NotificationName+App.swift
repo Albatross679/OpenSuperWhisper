@@ -6,4 +6,6 @@ extension Notification.Name {
     static let indicatorWindowDidHide = Notification.Name("IndicatorWindowDidHide")
     static let indicatorWindowWillShow = Notification.Name("IndicatorWindowWillShow")
     static let openSettings = Notification.Name("OpenSettings")
+    static let showCloudflareSetup = Notification.Name("ShowCloudflareSetup")
+    static let appPreferencesCloudflareMenuChanged = Notification.Name("AppPreferencesCloudflareMenuChanged")
 }

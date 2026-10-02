@@ -76,7 +76,11 @@ class FluidAudioEngine: TranscriptionEngine {
         // Perform actual transcription - FluidAudio will emit progress automatically
         // FluidAudio 0.15.x requires an explicit decoder state per transcription.
         var decoderState = try TdtDecoderState(decoderLayers: await asrManager.decoderLayerCount)
-        let result = try await asrManager.transcribe(url, decoderState: &decoderState)
+        // The picker already narrows the list per Parakeet version, but the
+        // engine ignored the choice and auto-detected. nil keeps auto-detect.
+        let language = Language(rawValue: settings.selectedLanguage)
+        let result = try await asrManager.transcribe(
+            url, decoderState: &decoderState, language: language)
         
         guard !isCancelled else {
             throw CancellationError()

@@ -128,7 +128,7 @@ class ShortcutManager {
 
         // Require a double-tap only when starting a new recording. Once recording is
         // active, a single press stops it so the user isn't forced to double-tap again.
-        if AppPreferences.shared.doublePressToTrigger && activeVm == nil {
+        if useModifierOnlyHotkey && AppPreferences.shared.doublePressToTrigger && activeVm == nil {
             let now = CFAbsoluteTimeGetCurrent()
             let threshold = NSEvent.doubleClickInterval
             if lastPressDownTime > 0 && now - lastPressDownTime <= threshold {

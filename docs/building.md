@@ -1,0 +1,81 @@
+# Building
+
+## Requirements
+
+| Need | Why | Install |
+|---|---|---|
+| Xcode | the app is an `.xcodeproj` | App Store, then `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer && sudo xcodebuild -license accept`, then `xcodebuild -runFirstLaunch` |
+| cmake | builds `libwhisper` | `brew install cmake` |
+| Rust | builds the `asian-autocorrect` dylib the bridging header imports | `curl https://sh.rustup.rs -sSf \| sh` |
+| libomp | linked by `libwhisper` | `brew install libomp` |
+
+All four are required even for a cloud-only build: the bridging header pulls in whisper.cpp and asian-autocorrect, so the local engine compiles regardless. This is a cost for whoever builds the app, not for whoever installs it.
+
+## Signing
+
+Run this once, before the first build:
+
+```bash
+./scripts/create_signing_identity.sh
+```
+
+macOS ties permission grants to an app's designated requirement. Ad hoc signing makes that requirement a bare `cdhash`, which changes on every build, so each rebuild silently voids Accessibility, Input Monitoring, Microphone, and PostEvent while System Settings still shows them enabled.
+
+A self-signed certificate makes the requirement name the certificate instead, so grants survive rebuilds. It is user scoped, free, and needs no Apple Developer account. Check it took:
+
+```bash
+codesign -d -r- "/Applications/OSW Cloud.app"
+```
+
+A requirement mentioning `cdhash` means the identity is missing and the build fell back to ad hoc.
+
+The app ships as bundle id `local.clouddictation.OpenSuperWhisper`, display name `OSW Cloud`, so it coexists with a stock OpenSuperWhisper install rather than sharing its preferences. If both are installed, give them different record hotkeys; the default is Option + backtick in each.
+
+## Packaging
+
+```bash
+./scripts/make_dmg.sh
+```
+
+Produces a drag-to-install `runs/OSW Cloud.dmg`, about 8 MB. Unsigned by Apple, so it installs on the machine that built it and Gatekeeper refuses it everywhere else.
+
+Distribution needs an Apple Developer ID, after which the same script signs, notarizes, and staples:
+
+```bash
+./scripts/make_dmg.sh "Developer ID Application: Your Name (TEAMID)" your-notary-profile
+```
+
+The DMG format is not what makes an app distributable; notarization is. Upstream ships a notarized DMG, which is why installing OpenSuperWhisper never required Xcode.
+
+Notarization needs an Apple Developer Program membership, currently $99 a year. Nothing else substitutes: a self-signed certificate keeps permissions stable on the machine that built the app, but Gatekeeper still refuses it elsewhere. Until then a recipient must clear the quarantine flag by hand:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/OSW Cloud.app"
+```
+
+## Reproducibility
+
+The tracked source rebuilds both the app and the DMG. Verified by cloning the repo to a clean directory and running the pipeline: all patches applied and the app built.
+
+Clone this fork with `git clone --recurse-submodules https://github.com/Albatross679/OpenSuperWhisper.git`, then check out the published OSW Cloud branch. The upstream default `develop` branch remains separate during migration. Run `python3 scripts/patch_osw.py`, `npm test`, `scripts/test_shortcuts.sh` and `scripts/build_app.sh`. The candidate is `build/Build/Products/Release/OpenSuperWhisper.app`. These commands do not install or launch it.
+
+App source is tracked at `OpenSuperWhisper/` in the repository root, not in a nested clone. `build/`, `SourcePackages/`, submodule build products and `runs/` are local outputs. Upstream baseline `bef6bc0421d0c010e8f2fb4288c0d74978c8b964` is preserved in git history and recorded in `scripts/patch_osw.py`. Updating to newer upstream behavior is separate work. Do not run the old external manager's destructive `--sync` against this fork.
+
+The runtime plaintext credentials file is under Application Support, outside the repository and the app bundle. Do not copy it into builds, DMGs or shared archives. Packaging stages only the built app, not the user settings directory.
+
+Two things do not come from the repo:
+
+| Not reproducible | Consequence |
+|---|---|
+| `.auth-token.local` | A secret. Generate a new one and `wrangler secret put AUTH_TOKEN`. |
+| The signing certificate | A new one is a new identity, so permissions need granting once more. |
+
+Builds stamp their own version and provenance into `Info.plist` (`CFBundleShortVersionString`, `CDSourceRef`, `CDUpstreamRef`), so a binary traces back to the commits that produced it rather than reporting upstream's version.
+
+## Local regression tests
+
+`npm test` covers client encoders, stubbed HTTP, private local-file credential persistence and offline audio speed without real credentials or paid requests. After `python3 scripts/patch_osw.py`, run `scripts/test_shortcuts.sh` to test the actual pinned shortcut dispatch and mouse-event filtering with isolated test dependencies, plus fresh full patch generation, idempotent reruns and the accessible full-width picker layout contract. That command does not create event taps, post global input, record audio, or alter preferences. Installed hotkey permissions and physical recorder behavior still require a GUI check.
+
+## How the patching works
+
+`scripts/patch_osw.py` applies the OSW Cloud changes in place to the tracked root app source. It never clones, resets or replaces a nested upstream checkout. Owner provider/dashboard/credential files remain in `src/client/` and are copied into the app by the generator. Other modifications remain verified exact-string patches with idempotence sentinels. Edit owner sources or the generator rather than only a generated Swift file. Regression tests extract the pinned upstream source from git history into a temporary fixture, apply every patch twice and compare the result with the tracked app tree. See [repository-migration.md](repository-migration.md) for baseline, history and external dependency boundaries.
