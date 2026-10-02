@@ -233,7 +233,7 @@ class TranscriptionQueue: ObservableObject {
                 }
 
                 let settings = Settings()
-                let text = try await transcriptionService.transcribeAudio(url: sourceURL, settings: settings)
+                let text = try await transcriptionService.transcribeAudio(url: sourceURL, settings: settings, metricID: recording.id, recordedAt: recording.timestamp)
 
                 if isRecordingCancelled(recording.id) || Task.isCancelled {
                     return

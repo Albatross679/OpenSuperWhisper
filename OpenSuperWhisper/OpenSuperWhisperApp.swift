@@ -23,6 +23,8 @@ struct OpenSuperWhisperApp: App {
             Group {
                 if Self.isRunningTests {
                     EmptyView()
+                } else if appState.isCloudflareSetupPresented {
+                    CloudflareSetupView()
                 } else if !appState.hasCompletedOnboarding {
                     OnboardingView()
                 } else {
@@ -32,6 +34,9 @@ struct OpenSuperWhisperApp: App {
             .frame(width: 450)
             .frame(minHeight: 400, maxHeight: 900)
             .environmentObject(appState)
+            .onReceive(NotificationCenter.default.publisher(for: .showCloudflareSetup)) { _ in
+                appState.presentCloudflareSetup()
+            }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 450, height: 650)
@@ -67,12 +72,15 @@ extension OpenSuperWhisperApp {
     }
 }
 
+@MainActor
 class AppState: ObservableObject {
     @Published var hasCompletedOnboarding: Bool {
         didSet {
             AppPreferences.shared.hasCompletedOnboarding = hasCompletedOnboarding
         }
     }
+
+    @Published var isCloudflareSetupPresented: Bool
 
     init() {
         var onboarding = AppPreferences.shared.hasCompletedOnboarding
@@ -82,6 +90,38 @@ class AppState: ObservableObject {
         }
         #endif
         self.hasCompletedOnboarding = onboarding
+        self.isCloudflareSetupPresented = Self.needsCloudflareSetup()
+    }
+
+    /// A configured local engine or either Cloudflare credential keeps existing
+    /// installs out of the first-launch screen. New users must prove a Direct
+    /// API token by transcribing their own short recording before it is saved.
+    private static func needsCloudflareSetup() -> Bool {
+        let prefs = AppPreferences.shared
+        let hasDirectToken = !prefs.cloudflareDirectAPIToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasWorkerCredentials = !prefs.cloudflareEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !prefs.cloudflareAuthToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasWhisperModel = !(prefs.selectedWhisperModelPath ?? "").isEmpty
+        let hasCompletedLocalSetup = prefs.hasCompletedOnboarding && prefs.selectedEngine != "cloudflare"
+        return !hasDirectToken && !hasWorkerCredentials && !hasWhisperModel && !hasCompletedLocalSetup
+    }
+
+    func completeCloudflareSetup() {
+        hasCompletedOnboarding = true
+        isCloudflareSetupPresented = false
+        TranscriptionService.shared.reloadEngine()
+    }
+
+    func skipCloudflareSetupToSettings() {
+        hasCompletedOnboarding = true
+        isCloudflareSetupPresented = false
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .openSettings, object: nil)
+        }
+    }
+
+    func presentCloudflareSetup() {
+        isCloudflareSetupPresented = true
     }
 }
 
@@ -93,6 +133,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var microphoneObserver: AnyCancellable?
     private var recordingRetentionTimer: Timer?
     private var hideMainWindowAtLaunch = false
+    private var cloudflareMenuPreferencesObserver: NSObjectProtocol?
+    /// Display names for the Cloudflare registry, which carries none.
+    private let cloudflareModelLabels = [
+        "nova-3": "Deepgram Nova-3",
+        "whisper-turbo": "Whisper large-v3-turbo",
+        "whisper": "Whisper (base)",
+        "whisper-tiny-en": "Whisper tiny (English)",
+    ]
+    private let cloudflareCompressionRates = [
+        (value: 1.0, label: "1"),
+        (value: 1.25, label: "1.25"),
+        (value: 1.5, label: "1.5"),
+        (value: 1.75, label: "1.75"),
+        (value: 2.0, label: "2"),
+        (value: 2.25, label: "2.25"),
+        (value: 2.5, label: "2.5"),
+        (value: 2.75, label: "2.75"),
+        (value: 3.0, label: "3"),
+    ]
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !OpenSuperWhisperApp.isRunningTests else { return }
@@ -131,6 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         OpenSuperWhisperApp.startTranscriptionQueue()
         observeMicrophoneChanges()
+        observeCloudflareMenuPreferenceChanges()
         
         IndicatorWindowManager.shared.warmUp()
         
@@ -203,6 +263,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return UTType(filenameExtension: url.pathExtension)?.conforms(to: .audio) ?? false
     }
     
+    private func observeCloudflareMenuPreferenceChanges() {
+        cloudflareMenuPreferencesObserver = NotificationCenter.default.addObserver(
+            forName: .appPreferencesCloudflareMenuChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateStatusBarMenu()
+        }
+    }
+
     private func observeMicrophoneChanges() {
         microphoneObserver = microphoneService.$availableMicrophones
             .sink { [weak self] _ in
@@ -243,6 +313,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         
         transcriptionLanguageItem.submenu = languageSubmenu
         menu.addItem(transcriptionLanguageItem)
+
+        addCloudflareQuickControls(to: menu)
         
         // Listen for language preference changes
         NotificationCenter.default.addObserver(
@@ -314,6 +386,87 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         statusItem?.menu = menu
     }
     
+    private func addCloudflareQuickControls(to menu: NSMenu) {
+        let prefs = AppPreferences.shared
+        let cloudflareIsActive = prefs.selectedEngine == "cloudflare"
+        let provider = CloudProviderSelection.current
+        let selectedModel = CloudProviderSelection.modelKey(for: provider)
+
+        // The menu follows the selected provider's registry, so it can never
+        // offer a model that provider has no wire form for.
+        let modelItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+        let modelMenu = NSMenu()
+        for model in CloudProviderSelection.catalog(for: provider) {
+            let title = model.label == model.key ? (cloudflareModelLabels[model.key] ?? model.key) : model.label
+            let item = NSMenuItem(title: title, action: #selector(selectCloudflareModel(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = model.key
+            item.state = selectedModel == model.key ? .on : .off
+            item.isEnabled = cloudflareIsActive
+            modelMenu.addItem(item)
+        }
+        modelItem.submenu = modelMenu
+        modelItem.isEnabled = cloudflareIsActive
+        menu.addItem(modelItem)
+
+        let compressionItem = NSMenuItem(title: "Compression rate", action: nil, keyEquivalent: "")
+        let compressionMenu = NSMenu()
+        for rate in cloudflareCompressionRates {
+            let item = NSMenuItem(title: rate.label, action: #selector(selectCloudflareCompressionRate(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = rate.value
+            item.state = abs(prefs.cloudflareCompressionRate - rate.value) < 0.0001 ? .on : .off
+            item.isEnabled = cloudflareIsActive
+            compressionMenu.addItem(item)
+        }
+        compressionItem.submenu = compressionMenu
+        compressionItem.isEnabled = cloudflareIsActive
+        menu.addItem(compressionItem)
+
+        let cleanupItem = NSMenuItem(title: "LLM cleanup", action: #selector(toggleCloudflareCleanup(_:)), keyEquivalent: "")
+        cleanupItem.target = self
+        cleanupItem.state = prefs.cloudflareCleanupEnabled ? .on : .off
+        // Greyed out rather than silently doing nothing on a provider whose
+        // text models this app cannot reach.
+        cleanupItem.isEnabled = cloudflareIsActive && CloudProviderFeatures.of(provider).cleanup.isSupported
+        menu.addItem(cleanupItem)
+
+        menu.addItem(NSMenuItem.separator())
+    }
+
+    @objc private func selectCloudflareModel(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? String else { return }
+
+        let prefs = AppPreferences.shared
+        // Each provider remembers its own model, so the menu writes the key
+        // back to the provider that published it.
+        switch CloudProviderSelection.current {
+        case .cloudflare: prefs.cloudflareModel = model
+        case .huggingface: prefs.huggingFaceModel = model
+        case .openrouter: prefs.openRouterModel = model
+        }
+        let supportedLanguages = LanguageUtil.supportedLanguages(
+            engine: "cloudflare",
+            fluidAudioModelVersion: prefs.fluidAudioModelVersion
+        )
+        if !supportedLanguages.contains(prefs.whisperLanguage) {
+            prefs.whisperLanguage = supportedLanguages.first ?? "auto"
+            NotificationCenter.default.post(name: .appPreferencesLanguageChanged, object: nil)
+        }
+        updateStatusBarMenu()
+    }
+
+    @objc private func selectCloudflareCompressionRate(_ sender: NSMenuItem) {
+        guard let rate = sender.representedObject as? NSNumber else { return }
+        AppPreferences.shared.cloudflareCompressionRate = rate.doubleValue
+        updateStatusBarMenu()
+    }
+
+    @objc private func toggleCloudflareCleanup(_ sender: NSMenuItem) {
+        AppPreferences.shared.cloudflareCleanupEnabled.toggle()
+        updateStatusBarMenu()
+    }
+
     @objc private func selectMicrophone(_ sender: NSMenuItem) {
         guard let device = sender.representedObject as? MicrophoneService.AudioDevice else { return }
         microphoneService.selectMicrophone(device)

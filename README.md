@@ -1,0 +1,116 @@
+# OSW Cloud
+
+Active source is migrating to this genuine [OpenSuperWhisper fork](https://github.com/Albatross679/OpenSuperWhisper). The original [cloud-dictation repository](https://github.com/Albatross679/cloud-dictation) is retained for history and existing release downloads. This migration preserves the installed app's pinned upstream bef6bc0 behavior; upstream `develop` and its later changes are retained separately. See [migration boundaries](docs/repository-migration.md) and the [original upstream README](docs/upstream-readme.md).
+
+Dictation for macOS that transcribes on Cloudflare Workers AI instead of on your Mac.
+
+Hold a hotkey, speak, and the text lands in whatever app has focus.
+
+Built on **[Starmel/OpenSuperWhisper](https://github.com/Starmel/OpenSuperWhisper)** (MIT)
+
+## Why
+
+Commercial dictation apps run $8 to $15 a month. Cloudflare gives 10,000 neurons per day free, on the free plan and the paid plan alike. For people who don't really use the free neurons, dictation would be a way to take advantage of that.
+
+### Price
+
+|Daily dictation|This, on Whisper base|This, on Nova-3|Wispr Flow|
+|---|---|---|---|
+|30 min|**$0**|$1.38/mo|$15/mo|
+|1 hr|**$0**|$6.06/mo|$15/mo|
+
+### Latency
+
+|                   | This, on Whisper base | This, on Nova-3 | Wispr Flow         |
+| ----------------- | --------------- | --------------- | ------------------------ |
+| Latency, 9 s clip | ~1,250 ms       | **433 ms**      | <700 ms (vendor-claimed) |
+
+## Install and configure - Direct API (recommended)
+
+You do **not** need to deploy a Worker. The app can call Workers AI in your Cloudflare account directly.
+
+1. **Download [OSW Cloud v0.1.0](https://github.com/Albatross679/cloud-dictation/releases/download/v0.1.0/OSW.Cloud.dmg)**, open the DMG, and drag `OSW Cloud.app` to `/Applications`. Or install with Homebrew: `brew install --cask albatross679/tap/osw-cloud`.
+2. **Create a Cloudflare account** if you do not already have one.
+3. In the Cloudflare dashboard, **AI in the left side panel -> Workers AI -> Rest API -> Create API Token**
+   <img src="attachments/workers-ai-rest-api.png" width="600" alt="Cloudflare dashboard: Workers AI page with the REST API button">
+   <img src="attachments/create-api-token.png" width="600" alt="Using Workers AI REST API page with the Create a Workers AI API Token panel">
+4. On a fresh launch, the app walks you through creating, testing, and saving a Direct API token in one window. You can also open **Settings > Models > Engine > Cloudflare**; paste **only the API token**. Use **Test Connection** to surface an invalid token or account before dictating.
+   <img src="attachments/app-settings-direct-api.png" width="475" alt="App settings: Cloudflare engine, Direct API connection, token pasted">
+
+### Settings worth knowing
+
+- **Transcription > Language.** Nova-3 serves ten languages and errors on the rest. For anything else pick `whisper-turbo`.
+- **Transcription > Vocabulary.** A comma separated term list, not prose. `R2, Kubernetes, Workers AI`. It measurably fixes proper nouns.
+- **Cloud provider > Audio speed.** Choose `1`, `1.25`, `1.5`, `1.75`, `2`, `2.25`, `2.5`, `2.75`, or `3`; default `1` uploads the original recording unchanged. Higher speeds preserve pitch and cut billed audio minutes, but trade accuracy for cost - see the measured WER deltas in [asr-compression-cost](https://github.com/Albatross679/asr-compression-cost). 1.5 is recommended.
+
+## Other providers
+
+Cloudflare remains the default cloud provider. **Settings > Models > Engine** has one bar with **Parakeet**, **Whisper**, **Cloudflare**, **Hugging Face**, and **OpenRouter**. The first two run locally; the other three upload to their selected provider. Each provider keeps a separate API key in a private local settings file, so switching never overwrites another key. **Test Connection** is available for all three; a valid key does not guarantee access to every model.
+
+### Local API key settings
+
+API keys are **plaintext**, stored at `~/Library/Application Support/OSW Cloud/credentials.json`, not embedded in the app. The file is mode `0600`, its parent is `0700`, and writes are atomic. Other processes running as your Mac user and backups can still read it. This storage tradeoff was explicitly approved; keep the file private and out of git, app bundles and shared archives.
+
+When the file is missing, the app attempts one no-prompt import of existing Keychain entries and an old Worker token already in UserDefaults. Existing Keychain entries and unrelated preferences are left untouched. Keys needing Keychain approval are not retried silently: the app shows an import notice and accepts a fresh paste. A damaged settings file is not overwritten, and save failures appear in Settings and block cloud requests until fixed. **Reload local settings** retries after a repair.
+
+**Import keys from environment** is an explicit Settings action and never replaces an existing key. It reads `CLOUD_DICTATION_WORKER_TOKEN`, `CLOUD_DICTATION_DIRECT_API_TOKEN`, `HF_TOKEN`, and `OPENROUTER_API_KEY` from the app process environment. GUI-launched apps may not inherit your shell environment, so pasting into the selected provider's key field is usually simpler. No Mac password is collected by the app.
+
+### Hugging Face
+
+1. Create a fine-grained access token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens/new?ownUserPermissions=inference.serverless.write&tokenType=fineGrained) with the **Make calls to Inference Providers** permission.
+2. Paste it into the key field. There is no account or endpoint to configure.
+
+Models are `openai/whisper-large-v3-turbo` (default) and `openai/whisper-large-v3`. Those are the only two speech models the `hf-inference` provider serves warm; every other Whisper size answers "Model not supported by provider hf-inference", so the picker does not offer one.
+
+Cost: Inference Providers bills per request against a free monthly credit allowance, with more credit on PRO. See [the pricing page](https://huggingface.co/docs/inference-providers/pricing) for current rates.
+
+### OpenRouter
+
+1. Create a key at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) and add credit.
+2. Paste it into the key field.
+
+Models include the existing `openai/whisper-large-v3-turbo` (default), `openai/whisper-large-v3`, `deepgram/nova-3`, `openai/gpt-4o-mini-transcribe`, and `openai/gpt-4o-transcribe`, plus `google/gemini-3.5-transcribe`, `fish-audio/transcribe-1-pro`, `assemblyai/universal-3-5-pro`, `meta/muse-voice-transcribe-1.0`, `microsoft/mai-transcribe-2`, `qwen/qwen3-asr-1.7b`, `qwen/qwen3-asr-0.6b`, and `openai/gpt-transcribe`. The eight newly added entries start in automatic language detection mode; the app does not claim model-specific language pinning or vocabulary boosting until it has a verified compatible wire option.
+
+Cost: pay per request with no subscription, at each upstream provider's rate plus OpenRouter's fee. Every response reports its own `usage.cost`, and the [activity page](https://openrouter.ai/activity) is the authority. Recordings are capped at 25 MB and upstream providers time out after about 60 seconds.
+
+### What each provider can do
+
+| | Cloudflare | Hugging Face | OpenRouter |
+|---|---|---|---|
+| Language pinning | yes, per model | **no**, the speech pipeline rejects a language parameter | per model; eight new entries are auto-only |
+| Vocabulary boosting | yes, on Nova-3 and Whisper turbo | **no**, the pipeline takes no decoder prompt | model/provider-specific; this app does not send optional keyterm routes |
+| Audio speed | yes | yes | yes |
+| LLM cleanup | yes, on Workers AI | yes, on the HF router | yes, on OpenRouter |
+| Local dictation usage dashboard | dictation counts, original minutes and estimated/unknown request costs | dictation counts, original minutes and unknown costs | dictation counts, original minutes and provider-reported/unknown costs |
+| Legacy neuron readout | Worker account uploads only, UTC | no, not a Cloudflare account | no, not a Cloudflare account |
+
+Where a feature says no, the app disables the control and prints the reason next to it rather than accepting the setting and dropping it. Audio speed is applied on your Mac before the upload, so every provider honors it. The vocabulary list still reaches the cleanup pass as known spellings even where the recognizer cannot use it.
+
+## Dictation usage
+
+Open **Dictation usage** in the main window for separate native charts of dictation counts, original recording minutes and request costs across local engines and all cloud providers. Choose daily, weekly or monthly calendar totals, a date range and a provider filter. The Mac saves a private local ledger without transcripts, audio bytes or credentials. Reported charges, gross list-rate estimates and unknown costs remain separate, including cleanup and retries. Local inference adds minutes without a cloud API charge. Existing recordings and legacy Worker account totals are not backfilled as cross-provider history. See [docs/usage-metrics.md](docs/usage-metrics.md) for storage, rates, calendar rules and tests.
+
+## Structure
+
+```text
+src/
+├── index.js      router and auth gate
+├── api/          request handling, auth, usage counter
+├── core/         model registry, cleanup, vocabulary, language, metering
+└── client/       the Swift engine added to OpenSuperWhisper, one file per provider
+
+OpenSuperWhisper/ tracked app source in the upstream root layout
+OpenSuperWhisper.xcodeproj/ native app project
+scripts/          in-place patch, build, tests, package, signing identity
+docs/             the detail
+runs/             generated, gitignored
+repos/            upstream checkout, generated, gitignored
+```
+
+## Docs
+
+- [docs/models.md](docs/models.md) - which model to pick, languages, vocabulary, measured accuracy and cost
+- [docs/api.md](docs/api.md) - worker endpoints and parameters
+- [docs/building.md](docs/building.md) - build requirements, signing, packaging, reproducibility
+- [docs/usage-metrics.md](docs/usage-metrics.md) - local recording minutes, request costs, calendar dashboard and offline tests
+- [docs/functionality-check.md](docs/functionality-check.md) - synthetic request checks, unavailable models, offline regressions, and recorder-test limits

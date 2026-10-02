@@ -18,10 +18,15 @@ class TranscriptionService: ObservableObject {
     }
     
     private var currentEngine: TranscriptionEngine?
+    private var usageLoadedSelection: UsageSelection?
     private var transcriptionTask: TranscriptionTaskBox? = nil
     private var isCancelled = false
+    private var usageServiceBusy = false
     
-    init() {
+    private let usageMetricsStore: UsageMetricsStore
+
+    init(metricsStore: UsageMetricsStore = .shared) {
+        self.usageMetricsStore = metricsStore
         loadEngine()
     }
     
@@ -39,6 +44,7 @@ class TranscriptionService: ObservableObject {
     
     private func loadEngine() {
         let selectedEngine = AppPreferences.shared.selectedEngine
+        let usageSelection = UsageSelection.capture(engine: selectedEngine)
         print("Loading engine: \(selectedEngine)")
         
         isLoading = true
@@ -48,6 +54,8 @@ class TranscriptionService: ObservableObject {
             
             if selectedEngine == "fluidaudio" {
                 engine = await FluidAudioEngine()
+            } else if selectedEngine == "cloudflare" {
+                engine = await CloudflareEngine()
             } else {
                 engine = await WhisperEngine()
             }
@@ -57,6 +65,7 @@ class TranscriptionService: ObservableObject {
                 
                 await MainActor.run {
                     self.currentEngine = engine
+                    self.usageLoadedSelection = usageSelection
                     self.isLoading = false
                     print("Engine loaded: \(selectedEngine)")
                 }
@@ -80,7 +89,13 @@ class TranscriptionService: ObservableObject {
         }
     }
     
-    func transcribeAudio(url: URL, settings: Settings) async throws -> String {
+    func transcribeAudio(url: URL, settings: Settings, metricID: UUID = UUID(), recordedAt: Date? = nil) async throws -> String {
+        // Reserve the whole call before the asynchronous original-duration read.
+        // Otherwise indicator and queue calls can both pass the engine busy check.
+        while usageServiceBusy { try await Task.sleep(nanoseconds: 1_000_000) }
+        usageServiceBusy = true
+        defer { usageServiceBusy = false }
+
         // Serialize access to the engine: a whisper context must not process
         // two transcriptions concurrently (indicator flow and queue flow can
         // both reach this point due to async busy checks).
@@ -91,6 +106,18 @@ class TranscriptionService: ObservableObject {
             }
         }
         
+        // Read the original recording before any engine converts or speeds it up.
+        let usageEngine = currentEngine
+        let selection = usageEngine is CloudflareEngine ? UsageSelection.capture(engine: "cloudflare") : usageLoadedSelection ?? UsageSelection.capture(engine: AppPreferences.shared.selectedEngine)
+        let date = recordedAt ?? (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+        let seconds = await UsageTracking.audioSeconds(url)
+        let store = usageMetricsStore
+        let metricRun = store.begin(UsageDictation(id: metricID, recordedAt: date, originalSeconds: seconds,
+                                                 engine: selection.engine, provider: selection.provider, model: selection.model),
+                                    engine: selection.engine, provider: selection.provider, model: selection.model)
+        var metricOutcome = "failure"
+        defer { store.finishRun(metricRun, outcome: metricOutcome) }
+
         progress = 0.0
         conversionProgress = 0.0
         isConverting = true
@@ -111,7 +138,7 @@ class TranscriptionService: ObservableObject {
             }
         }
         
-        guard let engine = currentEngine else {
+        guard let engine = usageEngine else {
             throw TranscriptionError.contextInitializationFailed
         }
         
@@ -121,6 +148,12 @@ class TranscriptionService: ObservableObject {
                 Task { @MainActor in
                     guard let self = self, !self.isCancelled else { return }
                     self.progress = newProgress
+                }
+            }
+        } else if let cloudflareEngine = engine as? CloudflareEngine {
+            cloudflareEngine.onProgressUpdate = { [weak self] newProgress in
+                Task { @MainActor in
+                    self?.progress = newProgress
                 }
             }
         } else if let fluidEngine = engine as? FluidAudioEngine {
@@ -144,7 +177,10 @@ class TranscriptionService: ObservableObject {
                 throw CancellationError()
             }
             
-            let result = try await engine.transcribeAudio(url: url, settings: settings)
+            let result = try await UsageTracking.$context.withValue(
+                UsageContext(dictationID: metricID, runID: metricRun, store: store)) {
+                try await engine.transcribeAudio(url: url, settings: settings)
+            }
             
             try Task.checkCancellation()
             
@@ -169,8 +205,11 @@ class TranscriptionService: ObservableObject {
         transcriptionTask = TranscriptionTaskBox(task)
         
         do {
-            return try await task.value
+            let result = try await task.value
+            metricOutcome = "success"
+            return result
         } catch is CancellationError {
+            metricOutcome = "cancelled"
             isCancelled = true
             throw TranscriptionError.processingFailed
         }

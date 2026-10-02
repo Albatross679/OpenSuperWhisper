@@ -58,6 +58,76 @@ final class AppPreferences {
     
     @UserDefault(key: "fluidAudioModelVersion", defaultValue: "v3")
     var fluidAudioModelVersion: String
+
+    @UserDefault(key: "cloudflareEndpoint", defaultValue: "")
+    var cloudflareEndpoint: String
+
+    @UserDefault(key: "cloudflareConnectionMode", defaultValue: "worker")
+    var cloudflareConnectionMode: String
+
+    @UserDefault(key: "cloudflareAccountID", defaultValue: "")
+    var cloudflareAccountID: String
+
+    /// User-approved local settings, separate from the app bundle. Legacy
+    /// Keychain entries are preserved and imported only without prompting.
+    var cloudflareAuthToken: String {
+        get { AuthTokenStore.token }
+        set { AuthTokenStore.token = newValue }
+    }
+
+    var cloudflareDirectAPIToken: String {
+        get { AuthTokenStore.directAPIToken }
+        set { AuthTokenStore.directAPIToken = newValue }
+    }
+
+    /// Which cloud transcribes: cloudflare, huggingface, or openrouter.
+    /// Existing installs have no value and so keep Cloudflare.
+    @UserDefault(key: "cloudProvider", defaultValue: "cloudflare")
+    var cloudProvider: String
+
+    /// Separate local settings keys per provider. Switching provider must never
+    /// overwrite another vendor's key, and no two providers share one.
+    var huggingFaceAPIToken: String {
+        get { AuthTokenStore.key(for: .huggingface) }
+        set { AuthTokenStore.setKey(newValue, for: .huggingface) }
+    }
+
+    var openRouterAPIToken: String {
+        get { AuthTokenStore.key(for: .openrouter) }
+        set { AuthTokenStore.setKey(newValue, for: .openrouter) }
+    }
+
+    @UserDefault(key: "cloudflareModel", defaultValue: "nova-3")
+    var cloudflareModel: String
+
+    /// A model key only means something to the vendor that publishes it, so
+    /// each provider remembers its own choice rather than sharing one.
+    @UserDefault(key: "huggingFaceModel", defaultValue: "whisper-large-v3-turbo")
+    var huggingFaceModel: String
+
+    @UserDefault(key: "openRouterModel", defaultValue: "whisper-large-v3-turbo")
+    var openRouterModel: String
+
+    @UserDefault(key: "huggingFaceCleanupModel", defaultValue: "llama-8b")
+    var huggingFaceCleanupModel: String
+
+    @UserDefault(key: "openRouterCleanupModel", defaultValue: "gemini-flash")
+    var openRouterCleanupModel: String
+
+    @UserDefault(key: "cloudflareCleanupEnabled", defaultValue: false)
+    var cloudflareCleanupEnabled: Bool
+
+    @UserDefault(key: "cloudflareCleanupModel", defaultValue: "llama-8b")
+    var cloudflareCleanupModel: String
+
+    /// Playback tempo used for cloud uploads. 1 keeps the original WAV.
+    @UserDefault(key: "cloudflareCompressionRate", defaultValue: 1.0)
+    var cloudflareCompressionRate: Double
+
+    /// JSON map of model key to the languages it accepts, cached from the
+    /// worker. "*" means unrestricted, empty means auto-detect only.
+    @UserDefault(key: "cloudflareModelLanguages", defaultValue: "")
+    var cloudflareModelLanguages: String
     
     @UserDefault(key: "qwen3Variant", defaultValue: "f32")
     var qwen3Variant: String

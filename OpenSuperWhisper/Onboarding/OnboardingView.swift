@@ -78,6 +78,8 @@ class OnboardingViewModel: ObservableObject {
                 updatedModel.isDownloaded = modelManager.isModelDownloaded(name: filename)
             case .parakeet(let version):
                 updatedModel.isDownloaded = isFluidAudioModelDownloaded(version: version)
+            case .cloudflare:
+                updatedModel.isDownloaded = true
             }
             return updatedModel
         }
@@ -109,6 +111,14 @@ class OnboardingViewModel: ObservableObject {
         case .parakeet(let version):
             AppPreferences.shared.selectedEngine = "fluidaudio"
             AppPreferences.shared.fluidAudioModelVersion = version
+        case .cloudflare:
+            let prefs = AppPreferences.shared
+            prefs.selectedEngine = "cloudflare"
+            // Existing installs retain Worker mode. A first-time Cloudflare
+            // user has no Worker credentials, so start on the no-deploy path.
+            if prefs.cloudflareEndpoint.isEmpty && prefs.cloudflareAuthToken.isEmpty {
+                prefs.cloudflareConnectionMode = "direct"
+            }
         }
     }
 
@@ -126,6 +136,8 @@ class OnboardingViewModel: ObservableObject {
         }
         
         switch model.type {
+        case .cloudflare:
+            return
         case .whisper(let url, _):
             try await downloadWhisperModel(model: model, url: url)
         case .parakeet(let version):
@@ -499,6 +511,9 @@ struct OnboardingView: View {
     }
 
     private func handleContinueButtonTap() {
+        if let selected = viewModel.unifiedModels.first(where: { $0.id == viewModel.selectedModelId }) {
+            viewModel.selectModel(selected)
+        }
         appState.hasCompletedOnboarding = true
     }
 }

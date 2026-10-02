@@ -20,7 +20,20 @@ jobs:
           ruby-version: '3.4'
       - name: Install xcpretty
         run: gem install xcpretty
-      - name: Make run.sh executable
-        run: chmod +x ./run.sh
-      - name: Build with run.sh
-        run: ./run.sh build 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Worker tooling
+        run: npm ci
+      - name: Verify in-place generation and offline regression tests
+        run: |
+          python3 scripts/patch_osw.py
+          git diff --exit-code
+          npm test
+          scripts/test_shortcuts.sh
+      - name: Build OSW Cloud candidate without installation
+        run: scripts/build_app.sh
+      - name: Verify candidate signature
+        run: codesign --verify --deep --strict build/Build/Products/Release/OpenSuperWhisper.app
