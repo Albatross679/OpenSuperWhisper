@@ -34,31 +34,36 @@ struct UsageDashboardButton: View {
 
 struct UsageDashboard: View {
     let store: UsageMetricsStore
+    private let referenceDate: Date?
     @State private var archive = UsageArchive()
     @State private var error: String?
+    @State private var selectedCostBucket: Date?
     @State private var period: UsagePeriod = .daily
     @State private var provider = "all"
     @State private var range = "30"
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -30, to: Date())!
     @State private var customEnd = Date()
-    init(store: UsageMetricsStore, initialProvider: String = "all", initialPeriod: UsagePeriod = .daily, initialRange: String = "30") {
+    init(store: UsageMetricsStore, initialProvider: String = "all", initialPeriod: UsagePeriod = .daily, initialRange: String = "30", initialCostBucket: Date? = nil, referenceDate: Date? = nil) {
         self.store = store
+        self.referenceDate = referenceDate
         _provider = State(initialValue: initialProvider)
         _period = State(initialValue: initialPeriod)
         _range = State(initialValue: initialRange)
+        _selectedCostBucket = State(initialValue: initialCostBucket)
     }
 
     private let providers = [("all", "All providers"), ("parakeet", "Parakeet · local"), ("whisper", "Whisper · local"),
                              ("cloudflare", "Cloudflare"), ("huggingface", "Hugging Face"), ("openrouter", "OpenRouter")]
     private var calendar: Calendar { .current }
+    private var now: Date { referenceDate ?? Date() }
     private var bounds: (Date, Date) {
-        let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: range == "custom" ? customEnd : Date()))!
+        let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: range == "custom" ? customEnd : now))!
         let start: Date
         if range == "custom" { start = calendar.startOfDay(for: customStart) }
         else if range == "all" {
-            start = calendar.startOfDay(for: min(archive.dictations.map(\.recordedAt).min() ?? Date(),
-                                                archive.requests.map(\.startedAt).min() ?? Date()))
-        } else { start = calendar.date(byAdding: .day, value: -(Int(range)! - 1), to: calendar.startOfDay(for: Date()))! }
+            start = calendar.startOfDay(for: min(archive.dictations.map(\.recordedAt).min() ?? now,
+                                                archive.requests.map(\.startedAt).min() ?? now))
+        } else { start = calendar.date(byAdding: .day, value: -(Int(range)! - 1), to: calendar.startOfDay(for: now))! }
         return (start, end)
     }
     private var selectedProvider: String? { provider == "all" ? nil : provider }
@@ -139,6 +144,7 @@ struct UsageDashboard: View {
                                 AxisValueLabel { if let count = value.as(Int.self) { Text(count.formatted(.number.precision(.fractionLength(0)))) } }
                             }
                         }
+                        .modifier(UsageCalendarAxis(buckets: buckets, period: period, calendar: calendar))
                         .chartYAxisLabel("Dictations")
                         .frame(height: 165)
                         .accessibilityLabel("Dictation count by \(period.rawValue.lowercased()) calendar period")
@@ -151,22 +157,34 @@ struct UsageDashboard: View {
                         BarMark(x: .value("Calendar period", bucket.start, unit: period.component, calendar: calendar), y: .value("Minutes", bucket.minutes))
                             .foregroundStyle(Color.accentColor)
                     }
+                    .modifier(UsageCalendarAxis(buckets: buckets, period: period, calendar: calendar))
                     .chartYAxisLabel("Minutes")
                     .frame(height: 165).padding(8)
                     .accessibilityLabel("Original recording duration by \(period.rawValue.lowercased()) calendar period")
                 }
                 GroupBox("Request costs · USD") {
                     VStack(alignment: .leading, spacing: 8) {
+                        let bothSeries = UsageCostPresentation.hasBothSeries(buckets)
+                        let hasEstimates = buckets.contains { $0.estimatedUSD > 0 }
                         Chart(buckets) { bucket in
-                            BarMark(x: .value("Calendar period", bucket.start, unit: period.component, calendar: calendar), y: .value("USD", bucket.actualUSD), stacking: .unstacked)
-                                .foregroundStyle(by: .value("Cost type", "Provider reported"))
-                                .position(by: .value("Cost type", "Provider reported"))
-                            BarMark(x: .value("Calendar period", bucket.start, unit: period.component, calendar: calendar), y: .value("USD", bucket.estimatedUSD), stacking: .unstacked)
-                                .foregroundStyle(by: .value("Cost type", "Estimated list rate"))
-                                .position(by: .value("Cost type", "Estimated list rate"))
+                            if bothSeries {
+                                BarMark(x: .value("Calendar period", bucket.start, unit: period.component, calendar: calendar), y: .value("USD", bucket.actualUSD), stacking: .unstacked)
+                                    .foregroundStyle(by: .value("Cost type", "Provider reported"))
+                                    .position(by: .value("Cost type", "Provider reported"))
+                                BarMark(x: .value("Calendar period", bucket.start, unit: period.component, calendar: calendar), y: .value("USD", bucket.estimatedUSD), stacking: .unstacked)
+                                    .foregroundStyle(by: .value("Cost type", "Estimated list rate"))
+                                    .position(by: .value("Cost type", "Estimated list rate"))
+                            } else {
+                                // No categorical slot for an absent series. Values and heights are unchanged.
+                                BarMark(x: .value("Calendar period", bucket.start, unit: period.component, calendar: calendar),
+                                        y: .value("USD", bucket.actualUSD + bucket.estimatedUSD), stacking: .unstacked)
+                                    .foregroundStyle(by: .value("Cost type", hasEstimates ? "Estimated list rate" : "Provider reported"))
+                            }
                         }
                         .chartForegroundStyleScale(["Provider reported": Color.accentColor, "Estimated list rate": Color.orange])
+                        .modifier(UsageCalendarAxis(buckets: buckets, period: period, calendar: calendar))
                         .chartYAxisLabel("USD").frame(height: 165)
+                        costReadout
                         Text("Unknown costs are excluded from dollar bars, not treated as free. Estimates are gross list-rate values before account credits or free allowances.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(8)
@@ -237,11 +255,32 @@ struct UsageDashboard: View {
         .onAppear(perform: refresh)
         .onReceive(NotificationCenter.default.publisher(for: UsageMetricsStore.changed)) { _ in refresh() }
     }
+    private var costReadout: some View {
+        let selected = buckets.first { $0.start == selectedCostBucket }
+            ?? buckets.last { $0.actualUSD > 0 || $0.estimatedUSD > 0 || $0.unknownCosts > 0 }
+            ?? buckets.last
+        return VStack(alignment: .leading, spacing: 4) {
+            if let selected {
+                Picker("Exact bucket costs", selection: Binding(
+                    get: { selected.start }, set: { selectedCostBucket = $0 })) {
+                    ForEach(buckets) { bucket in
+                        Text(UsageCalendarAxis.label(bucket.start, period: period, calendar: calendar)).tag(bucket.start)
+                    }
+                }
+                Text("Reported " + UsageCostPresentation.exact(selected.actualUSD) + " USD")
+                Text("Estimated " + UsageCostPresentation.exact(selected.estimatedUSD) + " USD")
+                Text("\(selected.unknownCosts) requests with unknown cost, excluded from dollar amounts")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No buckets in this range.").foregroundStyle(.secondary)
+            }
+        }.font(.caption).textSelection(.enabled)
+    }
     private var calendarTotals: some View {
         GroupBox("Current calendar totals") {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(UsagePeriod.allCases, id: \.self) { item in
-                    let interval = calendar.dateInterval(of: item.component, for: Date())!
+                    let interval = calendar.dateInterval(of: item.component, for: now)!
                     let values = UsageAggregation.buckets(archive, start: interval.start, end: interval.end, period: item,
                                                          provider: selectedProvider, calendar: calendar)
                     let value = values.first ?? UsageBucket(start: interval.start)
@@ -267,5 +306,72 @@ struct UsageDashboard: View {
         case .estimate: return money(cost.usd ?? 0) + " estimated · $\(cost.usdPerAudioMinute ?? 0)/uploaded min · rate \(cost.rateDate ?? "unknown date")"
         case .unknown: return "Cost unknown, not zero"
         }
+    }
+}
+
+/// Presentation only. Aggregation and adaptive dollar-axis formatting stay in Charts.
+enum UsageCostPresentation {
+    static func hasBothSeries(_ buckets: [UsageBucket]) -> Bool {
+        buckets.contains { $0.actualUSD > 0 } && buckets.contains { $0.estimatedUSD > 0 }
+    }
+    /// Shortest round-trip representation, so positive costs never round to free.
+    static func exact(_ value: Double) -> String {
+        if value == 0 { return "0" }
+        let text = String(value)
+        let parts = text.split(separator: "e")
+        guard parts.count == 2, let exponent = Int(parts[1]) else { return text }
+        let mantissa = String(parts[0])
+        let digits = mantissa.replacingOccurrences(of: ".", with: "")
+        let wholeDigits = mantissa.split(separator: ".")[0].count
+        let point = wholeDigits + exponent
+        if point <= 0 { return "0." + String(repeating: "0", count: -point) + digits }
+        if point >= digits.count { return digits + String(repeating: "0", count: point - digits.count) }
+        let index = digits.index(digits.startIndex, offsetBy: point)
+        return String(digits[..<index]) + "." + String(digits[index...])
+    }
+}
+
+struct UsageCalendarAxis: ViewModifier {
+    let buckets: [UsageBucket]
+    let period: UsagePeriod
+    let calendar: Calendar
+
+    static func center(_ start: Date, period: UsagePeriod, calendar: Calendar) -> Date {
+        let interval = calendar.dateInterval(of: period.component, for: start)!
+        return interval.start.addingTimeInterval(interval.duration / 2)
+    }
+    static func ticks(_ buckets: [UsageBucket], period: UsagePeriod, calendar: Calendar) -> [Date] {
+        guard !buckets.isEmpty else { return [] }
+        // Four labels fit at the dashboard's minimum width, including both end buckets.
+        let count = min(4, buckets.count)
+        let indices = count == 1 ? [0] : (0..<count).map { $0 * (buckets.count - 1) / (count - 1) }
+        return indices.map { center(buckets[$0].start, period: period, calendar: calendar) }
+    }
+    static func label(_ date: Date, period: UsagePeriod, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = calendar.locale ?? .current
+        formatter.setLocalizedDateFormatFromTemplate(period == .monthly ? "MMM yyyy" : "MMM d")
+        let start = calendar.dateInterval(of: period.component, for: date)!.start
+        return (period == .weekly ? "Week of " : "") + formatter.string(from: start)
+    }
+    func body(content: Content) -> some View {
+        let first = buckets.first?.start ?? calendar.startOfDay(for: Date())
+        let end = calendar.dateInterval(of: period.component, for: buckets.last?.start ?? first)!.end
+        content
+            .chartXScale(domain: first...end, range: .plotDimension(padding: 32))
+            .chartXAxis {
+                AxisMarks(values: Self.ticks(buckets, period: period, calendar: calendar)) { value in
+                    AxisGridLine()
+                    AxisTick()
+                    AxisValueLabel(anchor: .top, collisionResolution: .disabled) {
+                        if let date = value.as(Date.self) {
+                            Text(Self.label(date, period: period, calendar: calendar).replacingOccurrences(of: "Week of ", with: "Week of\n"))
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                }
+            }
     }
 }
