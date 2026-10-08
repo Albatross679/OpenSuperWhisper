@@ -71,6 +71,12 @@ import AppKit
                     }
                 }
             }
+            let weeklyRange = UsageAggregation.buckets(UsageArchive(), start: date(5, month: 9), end: date(5), period: .weekly, calendar: calendar())
+            let weeklyTicks = UsageCalendarAxis.ticks(weeklyRange, period: .weekly, calendar: calendar())
+            assert(weeklyTicks.count == weeklyRange.count)
+            for bucket in weeklyRange {
+                assert(weeklyTicks.contains(UsageCalendarAxis.center(bucket.start, period: .weekly, calendar: calendar())))
+            }
             assert(UsageCostPresentation.exact(0.000056) == "0.000056")
             for value in [Double.leastNonzeroMagnitude, 1e-100, 1e-20, 0.00005555555555555556, 0.02741666666666666, 1e20] {
                 assert(Double(UsageCostPresentation.exact(value)) == value)
@@ -102,14 +108,15 @@ import AppKit
         let period = UsagePeriod.allCases.first { $0.rawValue.lowercased() == CommandLine.arguments[3] }!
         let width = Double(CommandLine.arguments[4])!
         let provider = CommandLine.arguments.count > 5 ? CommandLine.arguments[5] : "all"
-        let name = "\(fixture)-\(period.rawValue.lowercased())-\(Int(width))-\(provider)"
+        let range = CommandLine.arguments.count > 6 ? CommandLine.arguments[6] : "30"
+        let name = "\(fixture)-\(period.rawValue.lowercased())-\(Int(width))-\(provider)" + (range == "30" ? "" : "-\(range)")
         let store = UsageMetricsStore(url: root.appendingPathComponent("\(name)/usage.json"))
         seed(store, fixture: fixture)
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: width, height: 1200), styleMask: [.titled], backing: .buffered, defer: false)
         window.title = "Synthetic dashboard probe"
-        let host = NSHostingView(rootView: UsageDashboard(store: store, initialProvider: provider, initialPeriod: period, initialRange: "30", initialCostBucket: calendar().startOfDay(for: date(3)), referenceDate: date(4)))
+        let host = NSHostingView(rootView: UsageDashboard(store: store, initialProvider: provider, initialPeriod: period, initialRange: range, initialCostBucket: calendar().startOfDay(for: date(3)), referenceDate: date(4)))
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {

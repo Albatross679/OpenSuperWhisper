@@ -342,7 +342,9 @@ struct UsageCalendarAxis: ViewModifier {
     }
     static func ticks(_ buckets: [UsageBucket], period: UsagePeriod, calendar: Calendar) -> [Date] {
         guard !buckets.isEmpty else { return [] }
-        // Four labels fit at the dashboard's minimum width, including both end buckets.
+        // Weekly labels identify every calendar bucket, including the weeks with data.
+        // Longer ranges use vertical labels rather than dropping occupied weeks.
+        if period == .weekly { return buckets.map { center($0.start, period: period, calendar: calendar) } }
         let count = min(4, buckets.count)
         let indices = count == 1 ? [0] : (0..<count).map { $0 * (buckets.count - 1) / (count - 1) }
         return indices.map { center(buckets[$0].start, period: period, calendar: calendar) }
@@ -359,19 +361,28 @@ struct UsageCalendarAxis: ViewModifier {
     func body(content: Content) -> some View {
         let first = buckets.first?.start ?? calendar.startOfDay(for: Date())
         let end = calendar.dateInterval(of: period.component, for: buckets.last?.start ?? first)!.end
-        content
+        GeometryReader { geometry in
+            content
+            // Fix the plot width, rather than the axis view's drawn width. Charts still
+            // measures axis labels automatically, but every plot starts at the same edge.
+            .chartPlotStyle { plot in plot.frame(width: max(1, geometry.size.width - 72)) }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .chartXScale(domain: first...end, range: .plotDimension(padding: 32))
             .chartXAxis {
                 AxisMarks(values: Self.ticks(buckets, period: period, calendar: calendar)) { value in
                     AxisGridLine()
-                    AxisTick()
-                    AxisValueLabel(anchor: .top, collisionResolution: .disabled) {
+                    // Automatic ticks extend through the labels on macOS Charts.
+                    AxisTick(length: 4)
+                    AxisValueLabel(anchor: .top, collisionResolution: .disabled,
+                                   orientation: period == .weekly && buckets.count > 6 ? .vertical : .horizontal,
+                                   verticalSpacing: 4) {
                         if let date = value.as(Date.self) {
-                            Text(Self.label(date, period: period, calendar: calendar).replacingOccurrences(of: "Week of ", with: "Week of\n"))
+                            Text(Self.label(date, period: period, calendar: calendar).replacingOccurrences(of: "Week of ", with: ""))
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                 }
             }
+        }
     }
 }
