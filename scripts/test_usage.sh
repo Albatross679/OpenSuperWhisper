@@ -26,6 +26,9 @@ swiftc -O -parse-as-library -o "$OUT/test_usage" \
   "$ROOT/scripts/test_usage_metrics.swift"
 "$OUT/test_usage" "$OUT"
 swiftc -typecheck "$ROOT/src/client/UsageMetrics.swift" "$ROOT/src/client/UsageDashboard.swift"
+swiftc -parse-as-library -o "$OUT/test_presentation" \
+  "$ROOT/src/client/UsageMetrics.swift" "$ROOT/src/client/UsageDashboard.swift" "$ROOT/scripts/test_usage_presentation.swift"
+"$OUT/test_presentation" "$OUT/presentation"
 if [[ -f "$ROOT/OpenSuperWhisper/TranscriptionService.swift" ]]; then
   { printf 'import SwiftUI\n'; python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())' "$ROOT/OpenSuperWhisper/TranscriptionService.swift"; } > "$OUT/TranscriptionService.swift"
   swiftc -O -parse-as-library -o "$OUT/test_service" \
